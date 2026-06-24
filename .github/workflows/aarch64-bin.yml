@@ -1,0 +1,157 @@
+name: prebuilt binaries
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Upstream tag to build (e.g. v1.10.4). Leave blank to use latest upstream release.'
+        required: false
+        type: string
+  schedule:
+    - cron: '17 5 * * *'
+
+permissions:
+  contents: write
+
+jobs:
+  resolve:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Resolve target tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_TAG:-}" ]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG=$(gh api repos/kanidm/kanidm/releases/latest --jq .tag_name)
+          fi
+          echo "tag=$TAG" >>"$GITHUB_OUTPUT"
+          echo "Target tag: $TAG"
+
+  build:
+    needs: resolve
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            triple: aarch64-linux-gnu
+          - arch: x86_64
+            runner: ubuntu-24.04
+            triple: x86_64-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Skip if release asset already exists
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          RELEASE_TAG="${TAG}-bin"
+          ASSET="kanidm-${TAG}-${{ matrix.triple }}.tar.gz"
+          if gh release view "$RELEASE_TAG" --repo "${{ github.repository }}" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "$ASSET"; then
+            echo "skip=true" >>"$GITHUB_OUTPUT"
+            echo "Asset $ASSET already in release $RELEASE_TAG, skipping."
+          else
+            echo "skip=false" >>"$GITHUB_OUTPUT"
+          fi
+          echo "release_tag=$RELEASE_TAG" >>"$GITHUB_OUTPUT"
+          echo "asset=$ASSET" >>"$GITHUB_OUTPUT"
+
+      - name: Checkout upstream at tag
+        if: steps.check.outputs.skip != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: kanidm/kanidm
+          ref: ${{ needs.resolve.outputs.tag }}
+
+      - name: Install build dependencies
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang pkg-config \
+            libssl-dev libsqlite3-dev libudev-dev libpam0g-dev \
+            libdbus-1-dev libcap-dev libtss2-dev
+
+      - name: Install Rust toolchain
+        if: steps.check.outputs.skip != 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        if: steps.check.outputs.skip != 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ needs.resolve.outputs.tag }}-${{ matrix.arch }}
+
+      - name: Build
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          cargo build --release --locked \
+            -p kanidm_tools \
+            -p kanidm_unix_int \
+            -p daemon
+
+      - name: Stage artifacts
+        if: steps.check.outputs.skip != 'true'
+        id: stage
+        env:
+          TAG: ${{ needs.resolve.outputs.tag }}
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          STAGE="kanidm-${TAG}-${TRIPLE}"
+          mkdir -p "$STAGE/bin"
+          for b in kanidm kanidm_ssh_authorizedkeys_direct \
+                   kanidm_unixd kanidm_unixd_tasks \
+                   kanidm_ssh_authorizedkeys kanidm-unix \
+                   kanidmd; do
+            if [ -x "target/release/$b" ]; then
+              cp "target/release/$b" "$STAGE/bin/"
+              strip "$STAGE/bin/$b" || true
+            else
+              echo "WARNING: target/release/$b not found"
+            fi
+          done
+          ldd "$STAGE/bin/kanidm" > "$STAGE/ldd-kanidm.txt" || true
+          cat >"$STAGE/README" <<EOF
+          kanidm ${TAG} - prebuilt ${TRIPLE} binaries.
+
+          Built from https://github.com/kanidm/kanidm @ ${TAG}
+          Built by  ${{ github.repository }} via GitHub Actions on Ubuntu 24.04.
+
+          Dynamic libraries required (see ldd-kanidm.txt). On Arch:
+            pacman -S openssl sqlite systemd-libs pam dbus libcap tpm2-tss
+          EOF
+          tar -czf "${STAGE}.tar.gz" "$STAGE"
+          sha256sum "${STAGE}.tar.gz" > "${STAGE}.tar.gz.sha256"
+          echo "tarball=${STAGE}.tar.gz" >>"$GITHUB_OUTPUT"
+          echo "sha256=${STAGE}.tar.gz.sha256" >>"$GITHUB_OUTPUT"
+
+      - name: Publish release asset
+        if: steps.check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+          RELEASE_TAG: ${{ steps.check.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$RELEASE_TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --repo "${{ github.repository }}" \
+              --title "kanidm $TAG (prebuilt)" \
+              --notes "Prebuilt Linux binaries for kanidm $TAG, built from upstream tag $TAG. Source of truth: https://github.com/kanidm/kanidm/releases/tag/$TAG"
+          fi
+          gh release upload "$RELEASE_TAG" \
+            --repo "${{ github.repository }}" \
+            --clobber \
+            "${{ steps.stage.outputs.tarball }}" \
+            "${{ steps.stage.outputs.sha256 }}"
