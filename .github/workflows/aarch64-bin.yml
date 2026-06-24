@@ -155,3 +155,100 @@ jobs:
             --clobber \
             "${{ steps.stage.outputs.tarball }}" \
             "${{ steps.stage.outputs.sha256 }}"
+
+  publish-aur:
+    needs: [resolve, build]
+    runs-on: ubuntu-24.04
+    container: archlinux:latest
+    steps:
+      - name: Install tooling
+        run: |
+          pacman -Sy --noconfirm --needed base-devel git openssh pacman-contrib namcap
+          useradd -m builder
+          install -d -m 0700 -o builder -g builder /home/builder/.ssh
+
+      - name: Checkout fork (template + workflow)
+        uses: actions/checkout@v4
+
+      - name: Resolve version & fetch checksums
+        id: vars
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          RELEASE_TAG="${TAG}-bin"
+          PKGVER="${TAG#v}"
+          mkdir checksums
+          gh release download "$RELEASE_TAG" --repo "${{ github.repository }}" \
+            -p '*.sha256' -D checksums
+          SHA_X86=$(awk '{print $1}' "checksums/kanidm-${TAG}-x86_64-linux-gnu.tar.gz.sha256")
+          SHA_ARM=$(awk '{print $1}' "checksums/kanidm-${TAG}-aarch64-linux-gnu.tar.gz.sha256")
+          echo "pkgver=$PKGVER" >>"$GITHUB_OUTPUT"
+          echo "sha_x86=$SHA_X86" >>"$GITHUB_OUTPUT"
+          echo "sha_arm=$SHA_ARM" >>"$GITHUB_OUTPUT"
+
+      - name: Render PKGBUILD
+        env:
+          PKGVER: ${{ steps.vars.outputs.pkgver }}
+          SHA_X86: ${{ steps.vars.outputs.sha_x86 }}
+          SHA_ARM: ${{ steps.vars.outputs.sha_arm }}
+        run: |
+          set -euo pipefail
+          mkdir -p aur-stage
+          sed -e "s|%%PKGVER%%|${PKGVER}|g" \
+              -e "s|%%SHA256_X86_64%%|${SHA_X86}|g" \
+              -e "s|%%SHA256_AARCH64%%|${SHA_ARM}|g" \
+              .aur/kanidm-bin/PKGBUILD.in > aur-stage/PKGBUILD
+          chown -R builder:builder aur-stage
+
+      - name: Generate .SRCINFO & lint
+        run: |
+          cd aur-stage
+          sudo -u builder bash -c 'makepkg --printsrcinfo > .SRCINFO'
+          sudo -u builder namcap PKGBUILD || true
+
+      - name: Configure SSH for AUR
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          install -m 0600 /dev/stdin /home/builder/.ssh/id_ed25519 <<<"$AUR_SSH_KEY"
+          chown builder:builder /home/builder/.ssh/id_ed25519
+          sudo -u builder ssh-keyscan aur.archlinux.org > /home/builder/.ssh/known_hosts
+          chown builder:builder /home/builder/.ssh/known_hosts
+          cat >/home/builder/.ssh/config <<'EOF'
+          Host aur.archlinux.org
+            User aur
+            IdentityFile ~/.ssh/id_ed25519
+            IdentitiesOnly yes
+          EOF
+          chown builder:builder /home/builder/.ssh/config
+
+      - name: Push to AUR
+        env:
+          PKGVER: ${{ steps.vars.outputs.pkgver }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          sudo -u builder PKGVER="$PKGVER" WS="$GITHUB_WORKSPACE" bash -euxo pipefail <<'EOS'
+          cd /tmp
+          git config --global user.email "github-actions@bendik.local"
+          git config --global user.name "kanidm-bin auto-publish"
+          git config --global init.defaultBranch master
+          git clone ssh://aur@aur.archlinux.org/kanidm-bin.git || {
+            mkdir kanidm-bin && cd kanidm-bin && git init
+            git remote add origin ssh://aur@aur.archlinux.org/kanidm-bin.git
+            cd ..
+          }
+          cd /tmp/kanidm-bin
+          if [ -f PKGBUILD ] && grep -q "^pkgver=${PKGVER}$" PKGBUILD; then
+            echo "AUR already at pkgver=${PKGVER}, nothing to push."
+            exit 0
+          fi
+          cp "${WS}/aur-stage/PKGBUILD" .
+          cp "${WS}/aur-stage/.SRCINFO" .
+          git add PKGBUILD .SRCINFO
+          git commit -m "kanidm-bin ${PKGVER}"
+          git push -u origin HEAD:master
+          EOS
