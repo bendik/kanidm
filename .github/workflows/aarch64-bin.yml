@@ -68,7 +68,7 @@ jobs:
 
       - name: Checkout upstream at tag
         if: steps.check.outputs.skip != 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: kanidm/kanidm
           ref: ${{ needs.resolve.outputs.tag }}
@@ -168,7 +168,7 @@ jobs:
           install -d -m 0700 -o builder -g builder /home/builder/.ssh
 
       - name: Checkout fork (template + workflow)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Resolve version & fetch checksums
         id: vars
