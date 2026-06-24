@@ -121,6 +121,16 @@ jobs:
               echo "WARNING: target/release/$b not found"
             fi
           done
+          mkdir -p "$STAGE/systemd" "$STAGE/config"
+          cp examples/systemd/kanidm-unixd.service       "$STAGE/systemd/"
+          cp examples/systemd/kanidm-unixd-tasks.service "$STAGE/systemd/"
+          cp platform/opensuse/kanidmd.service           "$STAGE/systemd/"
+          sed -i -e 's|/usr/local/sbin/|/usr/bin/|g' \
+                 -e 's|/usr/sbin/|/usr/bin/|g' \
+                 "$STAGE"/systemd/*.service
+          cp examples/server.toml "$STAGE/config/server.toml.example"
+          cp examples/unixd       "$STAGE/config/unixd.example"
+          cp examples/kanidm      "$STAGE/config/config.example"
           ldd "$STAGE/bin/kanidm" > "$STAGE/ldd-kanidm.txt" || true
           cat >"$STAGE/README" <<EOF
           kanidm ${TAG} - prebuilt ${TRIPLE} binaries.
@@ -240,13 +250,13 @@ jobs:
             cd ..
           }
           cd /tmp/kanidm-bin
-          if [ -f PKGBUILD ] && grep -q "^pkgver=${PKGVER}$" PKGBUILD; then
-            echo "AUR already at pkgver=${PKGVER}, nothing to push."
-            exit 0
-          fi
           cp "${WS}/aur-stage/PKGBUILD" .
           cp "${WS}/aur-stage/.SRCINFO" .
           git add PKGBUILD .SRCINFO
+          if git diff --cached --quiet; then
+            echo "AUR already up to date, nothing to push."
+            exit 0
+          fi
           git commit -m "kanidm-bin ${PKGVER}"
           git push -u origin HEAD:master
           EOS
