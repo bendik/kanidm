@@ -163,7 +163,7 @@ jobs:
     steps:
       - name: Install tooling
         run: |
-          pacman -Sy --noconfirm --needed base-devel git openssh pacman-contrib namcap
+          pacman -Sy --noconfirm --needed base-devel git openssh pacman-contrib namcap curl
           useradd -m builder
           install -d -m 0700 -o builder -g builder /home/builder/.ssh
 
@@ -173,17 +173,15 @@ jobs:
       - name: Resolve version & fetch checksums
         id: vars
         env:
-          GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.resolve.outputs.tag }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           RELEASE_TAG="${TAG}-bin"
           PKGVER="${TAG#v}"
-          mkdir checksums
-          gh release download "$RELEASE_TAG" --repo "${{ github.repository }}" \
-            -p '*.sha256' -D checksums
-          SHA_X86=$(awk '{print $1}' "checksums/kanidm-${TAG}-x86_64-linux-gnu.tar.gz.sha256")
-          SHA_ARM=$(awk '{print $1}' "checksums/kanidm-${TAG}-aarch64-linux-gnu.tar.gz.sha256")
+          base="https://github.com/${REPO}/releases/download/${RELEASE_TAG}"
+          SHA_X86=$(curl -fsSL "${base}/kanidm-${TAG}-x86_64-linux-gnu.tar.gz.sha256" | awk '{print $1}')
+          SHA_ARM=$(curl -fsSL "${base}/kanidm-${TAG}-aarch64-linux-gnu.tar.gz.sha256" | awk '{print $1}')
           echo "pkgver=$PKGVER" >>"$GITHUB_OUTPUT"
           echo "sha_x86=$SHA_X86" >>"$GITHUB_OUTPUT"
           echo "sha_arm=$SHA_ARM" >>"$GITHUB_OUTPUT"
