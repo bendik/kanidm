@@ -94,6 +94,13 @@ jobs:
 
       - name: Build
         if: steps.check.outputs.skip != 'true'
+        env:
+          # Selects libs/profiles/release_linux.toml, which bakes in production
+          # default paths (UI at /usr/share/kanidm/ui/hpkg, resolver config at
+          # /etc/kanidm/unixd, server config at /etc/kanidm/server.toml) and a
+          # generic cpu_flags. Without this the build falls back to the
+          # `developer` profile (dev paths + cpu_flags=native → SIGILL risk).
+          KANIDM_BUILD_PROFILE: release_linux
         run: |
           cargo build --release --locked -p kanidm_tools
           cargo build --release --locked -p daemon
@@ -130,6 +137,12 @@ jobs:
           cp examples/server.toml "$STAGE/config/server.toml.example"
           cp examples/unixd       "$STAGE/config/unixd.example"
           cp examples/kanidm      "$STAGE/config/config.example"
+          # Web UI static assets served by kanidmd. The release_linux profile
+          # bakes KANIDM_SERVER_UI_PKG_PATH=/usr/share/kanidm/ui/hpkg, so the
+          # contents of server/core/static must be installed there. Without
+          # this kanidmd aborts at startup ("Can't find ../core/static/...").
+          mkdir -p "$STAGE/share/kanidm/ui"
+          cp -r server/core/static "$STAGE/share/kanidm/ui/hpkg"
           ldd "$STAGE/bin/kanidm" > "$STAGE/ldd-kanidm.txt" || true
           cat >"$STAGE/README" <<EOF
           kanidm ${TAG} - prebuilt ${TRIPLE} binaries.
