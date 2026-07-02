@@ -128,9 +128,15 @@ jobs:
             fi
           done
           mkdir -p "$STAGE/systemd" "$STAGE/config"
-          cp examples/systemd/kanidm-unixd.service       "$STAGE/systemd/"
-          cp examples/systemd/kanidm-unixd-tasks.service "$STAGE/systemd/"
-          cp platform/opensuse/kanidmd.service           "$STAGE/systemd/"
+          # Use the platform/opensuse units (not examples/systemd): they are
+          # the production-hardened variants and, crucially, declare
+          # StateDirectory=kanidm-unixd (needed for the HSM pin under
+          # DynamicUser) plus the TPM bits (tss group, /dev/tpmrm0) matching
+          # the `--features tpm` build. The examples/systemd unixd units omit
+          # StateDirectory, so kanidm_unixd fails to persist its HSM pin.
+          cp platform/opensuse/kanidm-unixd.service       "$STAGE/systemd/"
+          cp platform/opensuse/kanidm-unixd-tasks.service "$STAGE/systemd/"
+          cp platform/opensuse/kanidmd.service            "$STAGE/systemd/"
           sed -i -e 's|/usr/local/sbin/|/usr/bin/|g' \
                  -e 's|/usr/sbin/|/usr/bin/|g' \
                  "$STAGE"/systemd/*.service
