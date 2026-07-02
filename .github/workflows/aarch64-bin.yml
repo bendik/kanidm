@@ -57,9 +57,14 @@ jobs:
           set -euo pipefail
           RELEASE_TAG="${TAG}-bin"
           ASSET="kanidm-${TAG}-${{ matrix.triple }}.tar.gz"
-          if gh release view "$RELEASE_TAG" --repo "${{ github.repository }}" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "$ASSET"; then
+          # Only the scheduled run skips existing assets. A manual
+          # workflow_dispatch always rebuilds and re-uploads (--clobber),
+          # otherwise packaging/profile fixes can never reach an already
+          # published tag without manually deleting its release assets first.
+          if [ "$GITHUB_EVENT_NAME" = "schedule" ] && \
+             gh release view "$RELEASE_TAG" --repo "${{ github.repository }}" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "$ASSET"; then
             echo "skip=true" >>"$GITHUB_OUTPUT"
-            echo "Asset $ASSET already in release $RELEASE_TAG, skipping."
+            echo "Asset $ASSET already in release $RELEASE_TAG, skipping (scheduled run)."
           else
             echo "skip=false" >>"$GITHUB_OUTPUT"
           fi
