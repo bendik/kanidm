@@ -110,6 +110,9 @@ jobs:
           cargo build --release --locked -p kanidm_tools
           cargo build --release --locked -p daemon
           cargo build --release --locked -p kanidm_unix_int --features tpm
+          # PAM/NSS modules: upstream release tarballs don't carry them, and
+          # they must share this profile (baked-in unixd socket path).
+          cargo build --release --locked -p pam_kanidm -p nss_kanidm
 
       - name: Stage artifacts
         if: steps.check.outputs.skip != 'true'
@@ -131,6 +134,11 @@ jobs:
             else
               echo "WARNING: target/release/$b not found"
             fi
+          done
+          mkdir -p "$STAGE/lib"
+          for l in libpam_kanidm.so libnss_kanidm.so; do
+            cp "target/release/$l" "$STAGE/lib/"
+            strip "$STAGE/lib/$l" || true
           done
           mkdir -p "$STAGE/systemd" "$STAGE/config"
           # Use the platform/opensuse units (not examples/systemd): they are
