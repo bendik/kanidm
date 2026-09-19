@@ -278,11 +278,9 @@ jobs:
           git config --global user.email "github-actions@bendik.local"
           git config --global user.name "kanidm-bin auto-publish"
           git config --global init.defaultBranch master
-          git clone ssh://aur@aur.archlinux.org/kanidm-bin.git || {
-            mkdir kanidm-bin && cd kanidm-bin && git init
-            git remote add origin ssh://aur@aur.archlinux.org/kanidm-bin.git
-            cd ..
-          }
+          # kanidm-bin exists on the AUR, so a failed clone means broken auth
+          # (AUR_SSH_KEY) or an AUR outage: fail, never push a fresh history.
+          git clone ssh://aur@aur.archlinux.org/kanidm-bin.git
           cd /tmp/kanidm-bin
           # pkgrel: 1 for a new pkgver; unchanged if the rendering matches
           # what the AUR already has; otherwise (packaging-only change) +1.
