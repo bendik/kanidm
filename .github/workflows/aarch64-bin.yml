@@ -278,11 +278,9 @@ jobs:
           git config --global user.email "github-actions@bendik.local"
           git config --global user.name "kanidm-bin auto-publish"
           git config --global init.defaultBranch master
-          git clone ssh://aur@aur.archlinux.org/kanidm-bin.git || {
-            mkdir kanidm-bin && cd kanidm-bin && git init
-            git remote add origin ssh://aur@aur.archlinux.org/kanidm-bin.git
-            cd ..
-          }
+          # kanidm-bin exists on the AUR, so a failed clone means broken auth
+          # (AUR_SSH_KEY) or an AUR outage: fail, never push a fresh history.
+          git clone ssh://aur@aur.archlinux.org/kanidm-bin.git
           cd /tmp/kanidm-bin
           # pkgrel: 1 for a new pkgver; unchanged if the rendering matches
           # what the AUR already has; otherwise (packaging-only change) +1.
@@ -303,3 +301,69 @@ jobs:
           git commit -m "kanidm-bin ${PKGVER}-${rel}"
           git push -u origin HEAD:master
           EOS
+
+      # Hand the exact PKGBUILD the AUR now has (new or already up to date)
+      # to publish-uhhm, so both channels carry the same pkgver-pkgrel.
+      - name: Save published PKGBUILD
+        run: |
+          mkdir -p aur-final
+          cp /tmp/kanidm-bin/PKGBUILD aur-final/PKGBUILD
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aur-pkgbuild
+          path: aur-final/PKGBUILD
+
+  # Also publish the packages to the uhhm Gitea Arch registry, so corp
+  # machines install kanidm from [uhhm] alone, with no AUR helper. Built from
+  # the same PKGBUILD and the same GitHub release tarballs as the AUR.
+  publish-uhhm:
+    needs: [resolve, publish-aur]
+    runs-on: ubuntu-24.04
+    container: archlinux:latest
+    env:
+      # write:package token for the Gitea user `bl` (namespace of [uhhm]).
+      REGISTRY_TOKEN: ${{ secrets.UHHM_REGISTRY_TOKEN }}
+      REGISTRY_URL: https://project.uhhm.no/api/packages/bl/arch/uhhm
+    steps:
+      - name: Install tooling
+        run: |
+          pacman -Sy --noconfirm --needed base-devel curl
+          useradd -m builder
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: aur-pkgbuild
+          path: stage
+
+      # The packages only repackage prebuilt binaries (options=(!strip)), so
+      # both arches build on this x86_64 host by overriding CARCH.
+      - name: Build packages
+        run: |
+          set -euo pipefail
+          chown -R builder:builder stage
+          for arch in x86_64 aarch64; do
+            sed -e "s/^CARCH=.*/CARCH=\"$arch\"/" \
+                -e "s/^CHOST=.*/CHOST=\"$arch-pc-linux-gnu\"/" \
+                /etc/makepkg.conf > "/tmp/makepkg-$arch.conf"
+            (cd stage && sudo -u builder makepkg -f --nodeps --noconfirm \
+                --config "/tmp/makepkg-$arch.conf")
+          done
+          ls -l stage/*.pkg.tar.zst
+
+      - name: Upload to the uhhm registry
+        run: |
+          set -euo pipefail
+          if [ -z "${REGISTRY_TOKEN:-}" ]; then
+            echo "::error::UHHM_REGISTRY_TOKEN secret is not set"
+            exit 1
+          fi
+          for pkg in stage/*.pkg.tar.zst; do
+            code=$(curl -sS -o /tmp/resp -w '%{http_code}' --user "bl:${REGISTRY_TOKEN}" \
+              --upload-file "$pkg" "$REGISTRY_URL")
+            case "$code" in
+              2??) echo "uploaded $(basename "$pkg")" ;;
+              409) echo "already published: $(basename "$pkg")" ;;
+              *)   echo "::error::$(basename "$pkg"): HTTP $code"; cat /tmp/resp; exit 1 ;;
+            esac
+          done
