@@ -110,6 +110,9 @@ jobs:
           cargo build --release --locked -p kanidm_tools
           cargo build --release --locked -p daemon
           cargo build --release --locked -p kanidm_unix_int --features tpm
+          # PAM/NSS modules: upstream release tarballs don't carry them, and
+          # they must share this profile (baked-in unixd socket path).
+          cargo build --release --locked -p pam_kanidm -p nss_kanidm
 
       - name: Stage artifacts
         if: steps.check.outputs.skip != 'true'
@@ -131,6 +134,11 @@ jobs:
             else
               echo "WARNING: target/release/$b not found"
             fi
+          done
+          mkdir -p "$STAGE/lib"
+          for l in libpam_kanidm.so libnss_kanidm.so; do
+            cp "target/release/$l" "$STAGE/lib/"
+            strip "$STAGE/lib/$l" || true
           done
           mkdir -p "$STAGE/systemd" "$STAGE/config"
           # Use the platform/opensuse units (not examples/systemd): they are
@@ -230,13 +238,16 @@ jobs:
           sed -e "s|%%PKGVER%%|${PKGVER}|g" \
               -e "s|%%SHA256_X86_64%%|${SHA_X86}|g" \
               -e "s|%%SHA256_AARCH64%%|${SHA_ARM}|g" \
-              .aur/kanidm-bin/PKGBUILD.in > aur-stage/PKGBUILD
+              .aur/kanidm-bin/PKGBUILD.in > aur-stage/PKGBUILD.tmpl
+          # pkgrel is decided in "Push to AUR" against what the AUR has; lint
+          # a pkgrel=1 rendering meanwhile.
+          sed "s|%%PKGREL%%|1|" aur-stage/PKGBUILD.tmpl > aur-stage/PKGBUILD
           chown -R builder:builder aur-stage
 
-      - name: Generate .SRCINFO & lint
+      - name: Lint
         run: |
           cd aur-stage
-          sudo -u builder bash -c 'makepkg --printsrcinfo > .SRCINFO'
+          sudo -u builder makepkg --printsrcinfo >/dev/null
           sudo -u builder namcap PKGBUILD || true
 
       - name: Configure SSH for AUR
@@ -273,13 +284,22 @@ jobs:
             cd ..
           }
           cd /tmp/kanidm-bin
-          cp "${WS}/aur-stage/PKGBUILD" .
-          cp "${WS}/aur-stage/.SRCINFO" .
-          git add PKGBUILD .SRCINFO
-          if git diff --cached --quiet; then
-            echo "AUR already up to date, nothing to push."
+          # pkgrel: 1 for a new pkgver; unchanged if the rendering matches
+          # what the AUR already has; otherwise (packaging-only change) +1.
+          old_ver=$(sed -n 's/^[[:space:]]*pkgver = //p' .SRCINFO 2>/dev/null | head -1)
+          old_rel=$(sed -n 's/^[[:space:]]*pkgrel = //p' .SRCINFO 2>/dev/null | head -1)
+          render() { sed "s|%%PKGREL%%|$1|" "${WS}/aur-stage/PKGBUILD.tmpl"; }
+          if [ "$old_ver" != "$PKGVER" ] || [ -z "$old_rel" ]; then
+            rel=1
+          elif [ "$(render "$old_rel")" = "$(cat PKGBUILD)" ]; then
+            echo "AUR already up to date (${PKGVER}-${old_rel}), nothing to push."
             exit 0
+          else
+            rel=$((old_rel + 1))
           fi
-          git commit -m "kanidm-bin ${PKGVER}"
+          render "$rel" > PKGBUILD
+          makepkg --printsrcinfo > .SRCINFO
+          git add PKGBUILD .SRCINFO
+          git commit -m "kanidm-bin ${PKGVER}-${rel}"
           git push -u origin HEAD:master
           EOS
