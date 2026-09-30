@@ -180,13 +180,29 @@ nav a.navbar-brand {
 
 #cred-update-commit-bar {
   display: block;
-  /*
-  position: fixed;
-  bottom: .5rem;
-  left: 50%;
-  transform: translateX(-50%);
-  */
   background: white;
+}
+
+/* Once something has been added or removed and not yet saved, the
+   commit bar stays in view at the bottom of the viewport however long
+   the page is, and says what is at stake. */
+.cred-update-dirty-hint {
+  display: none;
+}
+
+.cred-update-dirty #cred-update-commit-bar {
+  position: sticky;
+  bottom: 0.5rem;
+  z-index: 10;
+  box-shadow: 0 0.25rem 1rem rgba(0, 0, 0, 0.25);
+}
+
+.cred-update-dirty .cred-update-clean-hint {
+  display: none;
+}
+
+.cred-update-dirty .cred-update-dirty-hint {
+  display: inline;
 }
 
 .icon-container {

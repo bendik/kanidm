@@ -152,6 +152,37 @@ window.removeBeforeUnloadHandler = function () {
     window.removeEventListener("beforeunload", beforeUnloadHandler);
 };
 
+// Nothing is saved until "Save Changes" is pressed, and a person who
+// has just added a passkey easily takes that for the end of it. The
+// server does not say whether the session holds unsaved changes, but
+// every request that finishes a change swaps the full section (with
+// the commit bar) back in, while the ones that start a change swap in
+// a sub-form (cancelling one of those changes nothing either way) and
+// the two below end the session. Once a change
+// is in, the section is marked dirty: the commit bar sticks to the
+// bottom of the viewport and says so. Marked after settling, not
+// after the swap: the swap is outerHTML, and settling restores the
+// new element's own attributes, which would take the class off again.
+const CRED_UPDATE_SECTION = "credentialUpdateDynamicSection";
+const CRED_UPDATE_NO_CHANGE = ["/ui/api/cu_cancel", "/ui/api/cu_commit"];
+// Kept here, not on the element: every swap replaces the section.
+let credUpdateDirty = false;
+
+function trackUnsavedChanges(event) {
+    const requestPath = event.detail.pathInfo?.requestPath;
+    const target = event.detail.target;
+    if (!requestPath || !target || (target.id !== CRED_UPDATE_SECTION && !target.querySelector?.("#" + CRED_UPDATE_SECTION))) return;
+    const section = document.getElementById(CRED_UPDATE_SECTION);
+    if (!section) return;
+    const path = new URL(requestPath, window.location.href).pathname;
+    if (CRED_UPDATE_NO_CHANGE.includes(path)) {
+        credUpdateDirty = false;
+    } else if (section.querySelector("#cred-update-commit-bar")) {
+        credUpdateDirty = true;
+    }
+    section.classList.toggle("cred-update-dirty", credUpdateDirty);
+}
+
 (function () {
     console.debug("credupdate: init");
     document.body.addEventListener("addPasswordSwapped", () => {
@@ -162,5 +193,6 @@ window.removeBeforeUnloadHandler = function () {
         startPasskeyEnrollment();
         setupSubmitBtnVisibility();
     });
+    document.body.addEventListener("htmx:afterSettle", trackUnsavedChanges);
     window.addEventListener("beforeunload", beforeUnloadHandler);
 })();
