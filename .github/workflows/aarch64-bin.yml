@@ -242,6 +242,8 @@ jobs:
           # pkgrel is decided in "Push to AUR" against what the AUR has; lint
           # a pkgrel=1 rendering meanwhile.
           sed "s|%%PKGREL%%|1|" aur-stage/PKGBUILD.tmpl > aur-stage/PKGBUILD
+          # Install scriptlets ship verbatim next to the PKGBUILD.
+          cp .aur/kanidm-bin/*.install aur-stage/
           chown -R builder:builder aur-stage
 
       - name: Lint
@@ -287,32 +289,41 @@ jobs:
           old_ver=$(sed -n 's/^[[:space:]]*pkgver = //p' .SRCINFO 2>/dev/null | head -1)
           old_rel=$(sed -n 's/^[[:space:]]*pkgrel = //p' .SRCINFO 2>/dev/null | head -1)
           render() { sed "s|%%PKGREL%%|$1|" "${WS}/aur-stage/PKGBUILD.tmpl"; }
+          # Install scriptlets count as packaging: a changed or new one bumps
+          # pkgrel just like a changed PKGBUILD rendering.
+          installs_match=true
+          for f in "${WS}"/aur-stage/*.install; do
+            [ -e "$f" ] || continue
+            cmp -s "$f" "$(basename "$f")" || installs_match=false
+          done
           if [ "$old_ver" != "$PKGVER" ] || [ -z "$old_rel" ]; then
             rel=1
-          elif [ "$(render "$old_rel")" = "$(cat PKGBUILD)" ]; then
+          elif [ "$(render "$old_rel")" = "$(cat PKGBUILD)" ] && $installs_match; then
             echo "AUR already up to date (${PKGVER}-${old_rel}), nothing to push."
             exit 0
           else
             rel=$((old_rel + 1))
           fi
           render "$rel" > PKGBUILD
+          cp "${WS}"/aur-stage/*.install .
           makepkg --printsrcinfo > .SRCINFO
-          git add PKGBUILD .SRCINFO
+          git add PKGBUILD .SRCINFO ./*.install
           git commit -m "kanidm-bin ${PKGVER}-${rel}"
           git push -u origin HEAD:master
           EOS
 
-      # Hand the exact PKGBUILD the AUR now has (new or already up to date)
-      # to publish-uhhm, so both channels carry the same pkgver-pkgrel.
+      # Hand the exact PKGBUILD and install scriptlets the AUR now has (new or
+      # already up to date) to publish-uhhm, so both channels carry the same
+      # pkgver-pkgrel with the same contents.
       - name: Save published PKGBUILD
         run: |
           mkdir -p aur-final
-          cp /tmp/kanidm-bin/PKGBUILD aur-final/PKGBUILD
+          cp /tmp/kanidm-bin/PKGBUILD /tmp/kanidm-bin/*.install aur-final/
 
       - uses: actions/upload-artifact@v4
         with:
           name: aur-pkgbuild
-          path: aur-final/PKGBUILD
+          path: aur-final
 
   # Also publish the packages to the uhhm Gitea Arch registry, so corp
   # machines install kanidm from [uhhm] alone, with no AUR helper. Built from
