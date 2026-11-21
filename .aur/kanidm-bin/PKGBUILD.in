@@ -42,6 +42,7 @@ package_kanidm-unixd-clients-bin() {
   provides=(kanidm-unixd-clients "kanidm-unixd-clients=${pkgver}")
   conflicts=(kanidm-unixd-clients kanidm-unix-modules)
   replaces=(kanidm-unix-modules)
+  install=kanidm-unixd-clients-bin.install
   local src; src=$(_srcdir)
   install -Dm755 "${srcdir}/${src}/lib/libpam_kanidm.so" \
                  "${pkgdir}/usr/lib/security/pam_kanidm.so"
